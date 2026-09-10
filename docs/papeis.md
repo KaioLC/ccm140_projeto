@@ -1,5 +1,5 @@
 # Linguagens escolhidas pra cada integrante
 
 ### Daniel
-### Rafa
+### Rafa -> Python
 ### Kaio -> C++
