@@ -1,0 +1,53 @@
+syntax = "proto3";
+
+package chat;
+
+
+message Request {
+  int64 timestamp = 1
+
+  oneof payload {
+    LoginRequest login = 2;
+    ChannelRequest channel = 3;
+    ChannelListRequest list = 4;
+  }
+}
+
+message Response {
+  int64 timestamp = 1;
+    
+    oneof payload {
+        LoginResponse login = 2;
+        ChannelResponse channel = 3;
+        ChannelListResponse list = 4;
+    }
+}
+
+message LoginRequest {
+    int32 id = 1
+    string usuario = 2
+}
+
+message LoginResponse {
+    bool status = 1;
+    string mensagem = 2;
+}
+
+message ChannelRequest {
+    int32 id = 1;
+    string name = 2
+    bool status = 3;
+}
+
+message ChannelResponse {
+    string name = 1
+    bool status = 2;
+}
+
+message ChannelListRequest {
+    // ...
+}
+
+message ChannelListResponse {
+    repeated string channels = 1;
+}
