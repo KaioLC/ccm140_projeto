@@ -4,7 +4,7 @@ package chat;
 
 
 message Request {
-  int64 timestamp = 1
+  int64 timestamp = 1;
 
   oneof payload {
     LoginRequest login = 2;
@@ -24,8 +24,8 @@ message Response {
 }
 
 message LoginRequest {
-    int32 id = 1
-    string usuario = 2
+    int32 id = 1;
+    string usuario = 2;
 }
 
 message LoginResponse {
