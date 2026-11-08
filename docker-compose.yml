@@ -1,0 +1,36 @@
+services:
+  broker:
+    build:
+      context: ./broker
+      dockerfile: Dockerfile
+    image: ccm140:pyzmq
+    container_name: broker
+    volumes:
+      - ./broker/broker.py:/app/main.py
+    ports:
+      - "5555:5555"
+      - "5556:5556"
+
+  cpp_server:
+    build:
+      context: .
+      dockerfile: cpp_server_client/Dockerfile
+    image: ccm140:cpp
+    command: ["/app/server"]
+    volumes:
+      - ./data/cpp:/data
+    depends_on:
+      - broker
+    deploy:
+      replicas: 2
+
+  cpp_client:
+    build:
+      context: .
+      dockerfile: cpp_server_client/Dockerfile
+    image: ccm140:cpp
+    command: ["/app/client"]
+    depends_on:
+      - cpp_server
+    deploy:
+      replicas: 2
