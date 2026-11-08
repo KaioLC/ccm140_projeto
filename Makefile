@@ -1,4 +1,4 @@
-.PHONY: help
+.PHONY: help docker-up docker-down
 
 help:
 	@echo "Comandos:"
@@ -6,7 +6,7 @@ help:
 	@echo "  make docker-down	- para e derruba os containers"
 
 docker-up:
-	docker-compose up --build
+	docker compose up --build
 
 docker-down:
-	docker-compose down
+	docker compose down
