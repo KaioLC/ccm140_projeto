@@ -1,23 +1,55 @@
 #include <iostream>
 #include <string>
+#include <vector>
 #include <chrono>
-#include <fstream>
-#include <unordered_set>
-#include <random>
-#include <sstream>
 #include <cstdlib>
+#include <sqlite3.h>
 #include <zmq.hpp>
 #include "chat.pb.h"
+
+class Database {
+private:
+    sqlite3* db;
+
+public:
+    Database(const std::string& path) {
+        sqlite3_open(path.c_str(), &db);
+        sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS logins (id TEXT PRIMARY KEY, user TEXT UNIQUE, timestamp INT);", nullptr, nullptr, nullptr);
+        sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS channels (id TEXT PRIMARY KEY, name TEXT UNIQUE, timestamp INT);", nullptr, nullptr, nullptr);
+    }
+
+    ~Database() {
+        sqlite3_close(db);
+    }
+
+    bool save_login(const std::string& id, const std::string& user, int64_t ts) {
+        std::string sql = "INSERT INTO logins VALUES ('" + id + "', '" + user + "', " + std::to_string(ts) + ");";
+        return sqlite3_exec(db, sql.c_str(), nullptr, nullptr, nullptr) == SQLITE_OK;
+    }
+
+    bool create_channel(const std::string& id, const std::string& name, int64_t ts) {
+        std::string sql = "INSERT INTO channels VALUES ('" + id + "', '" + name + "', " + std::to_string(ts) + ");";
+        return sqlite3_exec(db, sql.c_str(), nullptr, nullptr, nullptr) == SQLITE_OK;
+    }
+
+    std::vector<std::string> list_channels() {
+        std::vector<std::string> list;
+        sqlite3_stmt* stmt;
+        if (sqlite3_prepare_v2(db, "SELECT name FROM channels;", -1, &stmt, nullptr) == SQLITE_OK) {
+            while (sqlite3_step(stmt) == SQLITE_ROW) {
+                list.push_back((const char*)sqlite3_column_text(stmt, 0));
+            }
+        }
+        sqlite3_finalize(stmt);
+        return list;
+    }
+};
 
 class Server {
 private:
     zmq::context_t context;
     zmq::socket_t socket;
-    std::unordered_set<std::string> users_active;
-    std::unordered_set<std::string> channels_active;
-    std::string server_id;
-    std::string logins_file;
-    std::string channels_file;
+    Database db;
 
     int64_t get_timestamp() {
         return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -25,114 +57,72 @@ private:
         ).count();
     }
 
-    std::string generate_uuid() {
-        static std::random_device rd;
-        static std::mt19937 gen(rd());
-        static std::uniform_int_distribution<> dis(0, 15);
-        std::stringstream ss;
-        ss << std::hex;
-        for (int i = 0; i < 16; i++) ss << dis(gen);
-        return ss.str();
-    }
-
-    void load_channels() {
-        std::ifstream file(channels_file);
-        std::string ch;
-        while (std::getline(file, ch)) {
-            if (!ch.empty()) channels_active.insert(ch);
-        }
+    std::string gen_id() {
+        return std::to_string(get_timestamp()) + "_" + std::to_string(std::rand() % 10000);
     }
 
     void get_login(const chat::LoginRequest& req, int64_t ts, chat::Response& res) {
         std::string user = req.user();
-        std::string id = req.id().empty() ? generate_uuid() : req.id();
-        chat::LoginResponse* login_res = res.mutable_login();
-        login_res->set_id(id);
+        auto* login_res = res.mutable_login();
+        login_res->set_id(req.id());
 
-        if (users_active.insert(user).second) {
+        if (db.save_login(req.id(), user, ts)) {
             login_res->set_status(true);
             login_res->set_message("Login Successfully.");
-
-            std::ofstream file(logins_file, std::ios::app);
-            file << id << ";" << user << ";" << ts << "\n";
-
-            std::cout << "[INFO] New session: " << user << " (ts=" << ts << ")" << std::endl;
+            std::cout << "[INFO] New session: " << user << std::endl;
         } else {
             login_res->set_status(false);
-            login_res->set_message("Login Error: User already exists.");
+            login_res->set_message("Login Error.");
             std::cout << "[WARN] User already exists: " << user << std::endl;
         }
     }
 
     void create_channel(const chat::ChannelRequest& req, int64_t ts, chat::Response& res) {
         std::string name = req.name();
-        std::string id = req.id().empty() ? generate_uuid() : req.id();
-        chat::ChannelResponse* chan_res = res.mutable_channel();
-        chan_res->set_id(id);
+        auto* chan_res = res.mutable_channel();
+        chan_res->set_id(req.id());
         chan_res->set_name(name);
 
-        if (channels_active.insert(name).second) {
+        if (db.create_channel(req.id(), name, ts)) {
             chan_res->set_status(true);
-            chan_res->set_message("Channel created successfully.");
-
-            std::ofstream file(channels_file, std::ios::app);
-            file << name << "\n";
-
-            std::cout << "[INFO] Channel created: " << name << " (ts=" << ts << ")" << std::endl;
+            chan_res->set_message("Channel created.");
+            std::cout << "[INFO] Channel created: " << name << std::endl;
         } else {
             chan_res->set_status(false);
-            chan_res->set_message("Error: Channel already exists.");
+            chan_res->set_message("Channel already exists.");
             std::cout << "[WARN] Channel already exists: " << name << std::endl;
         }
     }
 
     void list_channels(chat::Response& res) {
-        chat::ChannelListResponse* list_res = res.mutable_list();
-        for (const auto& ch : channels_active) {
+        auto* list_res = res.mutable_list();
+        for (const auto& ch : db.list_channels()) {
             list_res->add_channels(ch);
         }
-        std::cout << "[INFO] Channels listed (" << channels_active.size() << " total)" << std::endl;
     }
 
 public:
-    Server(const std::string& broker_uri, const std::string& id)
-        : context(1),
-          socket(context, zmq::socket_type::rep),
-          server_id(id),
-          logins_file("/data/logins_" + id + ".txt"),
-          channels_file("/data/channels_" + id + ".txt") {
-        load_channels();
-        socket.connect(broker_uri);
-        std::cout << "[SERVER " << server_id << "] Connected to " << broker_uri << std::endl;
+    Server(const std::string& uri, const std::string& db_path)
+        : context(1), socket(context, zmq::socket_type::rep), db(db_path) {
+        socket.connect(uri);
     }
 
     void run() {
         while (true) {
-            zmq::message_t zmq_msg;
-            if (!socket.recv(zmq_msg, zmq::recv_flags::none)) continue;
+            zmq::message_t msg;
+            socket.recv(msg, zmq::recv_flags::none);
 
             chat::Request req;
-            req.ParseFromArray(zmq_msg.data(), static_cast<int>(zmq_msg.size()));
-
+            req.ParseFromString(msg.to_string());
             std::cout << "[RECV] id=" << req.id() << " ts=" << req.timestamp() << std::endl;
 
             chat::Response res;
-            res.set_id(generate_uuid());
+            res.set_id(gen_id());
             res.set_timestamp(get_timestamp());
 
-            switch (req.payload_case()) {
-                case chat::Request::kLogin:
-                    get_login(req.login(), req.timestamp(), res);
-                    break;
-                case chat::Request::kChannel:
-                    create_channel(req.channel(), req.timestamp(), res);
-                    break;
-                case chat::Request::kList:
-                    list_channels(res);
-                    break;
-                default:
-                    break;
-            }
+            if (req.has_login()) get_login(req.login(), req.timestamp(), res);
+            else if (req.has_channel()) create_channel(req.channel(), req.timestamp(), res);
+            else if (req.has_list()) list_channels(res);
 
             std::string out;
             res.SerializeToString(&out);
@@ -144,9 +134,9 @@ public:
 
 int main() {
     const char* host = std::getenv("HOSTNAME");
-    std::string server_id = host ? std::string(host) : "local";
+    std::string id = host ? host : "local";
 
-    Server server("tcp://broker:5556", server_id);
+    Server server("tcp://broker:5556", "/data/server_" + id + ".db");
     server.run();
     return 0;
 }
