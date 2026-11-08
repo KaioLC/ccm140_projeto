@@ -1,4 +1,4 @@
-# Projeto Sistemas Distribuídos (CC7261) - Parte 1
+# Projeto Sistemas Distribuídos
 
 Sistema distribuído para troca de mensagens instantâneas utilizando Docker, ZeroMQ (padrão Request-Reply via Broker), serialização binária com Protobuf e persistência local em SQLite.
 
