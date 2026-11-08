@@ -24,7 +24,7 @@ while True:
             server_socket.send(message, zmq.SNDMORE)
         else:
             server_socket.send(message)
-        print(f"Client messages: {client_count}", flush=True)
+        # print(f"Client messages: {client_count}", flush=True)
 
     if socks.get(server_socket) == zmq.POLLIN:
         server_count += 1
@@ -34,4 +34,4 @@ while True:
             client_socket.send(message, zmq.SNDMORE)
         else:
             client_socket.send(message)
-        print(f"Server messages: {server_count}", flush=True)
+        # print(f"Server messages: {server_count}", flush=True)
