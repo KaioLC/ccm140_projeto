@@ -3,13 +3,25 @@ services:
     build:
       context: ./broker
       dockerfile: Dockerfile
-    image: ccm140:pyzmq
+    image: ccm140:broker
     container_name: broker
     volumes:
       - ./broker/broker.py:/app/main.py
     ports:
       - "5555:5555"
       - "5556:5556"
+
+  proxy:
+    build:
+      context: ./broker
+      dockerfile: Dockerfile
+    image: ccm140:proxy
+    container_name: proxy
+    volumes:
+      - ./broker/proxy.py:/app/main.py
+    ports:
+      - "5557:5557"
+      - "5558:5558"
 
   cpp_server:
     build:
@@ -21,6 +33,7 @@ services:
       - ./data/cpp:/data
     depends_on:
       - broker
+      - proxy
     deploy:
       replicas: 2
 
@@ -32,5 +45,6 @@ services:
     command: ["/app/client"]
     depends_on:
       - cpp_server
+      - proxy
     deploy:
       replicas: 2
