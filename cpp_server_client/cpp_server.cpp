@@ -14,7 +14,7 @@ private:
 public:
     Database(const std::string& path) {
         sqlite3_open(path.c_str(), &db);
-        sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS logins (id TEXT PRIMARY KEY, user TEXT UNIQUE, timestamp INT);", nullptr, nullptr, nullptr);
+        sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS logins (id TEXT PRIMARY KEY, user TEXT, timestamp INT);", nullptr, nullptr, nullptr);
         sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS channels (id TEXT PRIMARY KEY, name TEXT UNIQUE, timestamp INT);", nullptr, nullptr, nullptr);
     }
 

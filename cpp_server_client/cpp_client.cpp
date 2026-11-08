@@ -49,7 +49,7 @@ public:
     }
 
     void login() {
-        while (true) {
+        for (int attempt = 1; attempt <= 5; ++attempt) {
             chat::Request req;
             auto* login = req.mutable_login();
             login->set_id(user_id);
@@ -58,9 +58,10 @@ public:
             chat::Response res = send_req(req);
             if (res.login().status()) {
                 std::cout << "[INFO] " << res.login().message() << std::endl;
-                break;
+                return;
             }
-            std::cout << "[WARN] " << res.login().message() << " Retrying..." << std::endl;
+            std::cout << "[WARN] " << res.login().message() << " Retrying (" << attempt << "/5)..." << std::endl;
+            user_id = gen_id();
             std::this_thread::sleep_for(std::chrono::seconds(2));
         }
     }
