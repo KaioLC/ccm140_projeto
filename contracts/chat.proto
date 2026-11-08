@@ -2,52 +2,53 @@ syntax = "proto3";
 
 package chat;
 
-
 message Request {
-  int64 timestamp = 1;
+  string id = 1;
+  int64 timestamp = 2;
 
   oneof payload {
-    LoginRequest login = 2;
-    ChannelRequest channel = 3;
-    ChannelListRequest list = 4;
+    LoginRequest login = 3;
+    ChannelRequest channel = 4;
+    ChannelListRequest list = 5;
   }
 }
 
 message Response {
-  int64 timestamp = 1;
-    
-    oneof payload {
-        LoginResponse login = 2;
-        ChannelResponse channel = 3;
-        ChannelListResponse list = 4;
-    }
+  string id = 1;
+  int64 timestamp = 2;
+
+  oneof payload {
+    LoginResponse login = 3;
+    ChannelResponse channel = 4;
+    ChannelListResponse list = 5;
+  }
 }
 
 message LoginRequest {
-    int32 id = 1;
-    string usuario = 2;
+  string id = 1;
+  string user = 2;
 }
 
 message LoginResponse {
-    bool status = 1;
-    string mensagem = 2;
+  string id = 1;
+  bool status = 2;
+  string message = 3;
 }
 
 message ChannelRequest {
-    int32 id = 1;
-    string name = 2
-    bool status = 3;
+  string id = 1;
+  string name = 2;
 }
 
 message ChannelResponse {
-    string name = 1
-    bool status = 2;
+  string id = 1;
+  string name = 2;
+  bool status = 3;
+  string message = 4;
 }
 
-message ChannelListRequest {
-    // ...
-}
+message ChannelListRequest {}
 
 message ChannelListResponse {
-    repeated string channels = 1;
+  repeated string channels = 1;
 }
