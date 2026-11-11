@@ -23,6 +23,17 @@ services:
       - "5557:5557"
       - "5558:5558"
 
+  reference:
+    build:
+      context: .
+      dockerfile: reference/Dockerfile
+    image: ccm140:reference
+    container_name: reference
+    volumes:
+      - ./reference/reference.py:/app/main.py
+    ports:
+      - "5559:5559"
+
   cpp_server:
     build:
       context: .
@@ -34,6 +45,7 @@ services:
     depends_on:
       - broker
       - proxy
+      - reference
     deploy:
       replicas: 2
 

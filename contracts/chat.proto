@@ -5,6 +5,7 @@ package chat;
 message Request {
   string id = 1;
   int64 timestamp = 2;
+  int64 clock = 7;
 
   oneof payload {
     LoginRequest login = 3;
@@ -17,6 +18,7 @@ message Request {
 message Response {
   string id = 1;
   int64 timestamp = 2;
+  int64 clock = 7;
 
   oneof payload {
     LoginResponse login = 3;
@@ -74,4 +76,59 @@ message Publication {
   string channel = 3;
   string content = 4;
   int64 timestamp = 5;
+  int64 clock = 6;
+}
+
+
+message ServerInfo {
+  string name = 1;
+  int32 rank = 2;
+}
+
+message RegisterRequest {
+  string name = 1;
+}
+
+message RegisterResponse {
+  string name = 1;
+  int32 rank = 2;
+}
+
+message ServerListRequest {}
+
+message ServerListResponse {
+  repeated ServerInfo servers = 1;
+}
+
+message HeartbeatRequest {
+  string name = 1;
+}
+
+message HeartbeatResponse {
+  bool status = 1;
+  int64 physical_time = 2;
+}
+
+message ReferenceRequest {
+  string id = 1;
+  int64 timestamp = 2;
+  int64 clock = 3;
+
+  oneof payload {
+    RegisterRequest reg = 4;
+    ServerListRequest list = 5;
+    HeartbeatRequest heartbeat = 6;
+  }
+}
+
+message ReferenceResponse {
+  string id = 1;
+  int64 timestamp = 2;
+  int64 clock = 3;
+
+  oneof payload {
+    RegisterResponse reg = 4;
+    ServerListResponse list = 5;
+    HeartbeatResponse heartbeat = 6;
+  }
 }

@@ -3,6 +3,7 @@
 #include <vector>
 #include <chrono>
 #include <cstdlib>
+#include <algorithm>
 #include <sqlite3.h>
 #include <zmq.hpp>
 #include "chat.pb.h"
@@ -53,19 +54,108 @@ public:
 
 class Server {
 private:
+    std::string server_name;
+    int rank;
+    int64_t clock;
+    int64_t clock_offset;
+    int req_count;
+
     zmq::context_t context;
     zmq::socket_t rep_socket;
     zmq::socket_t pub_socket;
+    zmq::socket_t ref_socket;
     Database db;
 
-    int64_t get_timestamp() {
+    int64_t get_system_time() {
         return std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch()
         ).count();
     }
 
+    int64_t get_timestamp() {
+        return get_system_time() + clock_offset;
+    }
+
     std::string gen_id() {
         return std::to_string(get_timestamp()) + "_" + std::to_string(std::rand() % 10000);
+    }
+
+    void register_in_reference() {
+        chat::ReferenceRequest req;
+        clock++;
+        req.set_id(gen_id());
+        req.set_timestamp(get_timestamp());
+        req.set_clock(clock);
+        req.mutable_reg()->set_name(server_name);
+
+        std::string out;
+        req.SerializeToString(&out);
+        ref_socket.send(zmq::buffer(out), zmq::send_flags::none);
+
+        zmq::message_t reply;
+        ref_socket.recv(reply, zmq::recv_flags::none);
+
+        chat::ReferenceResponse res;
+        res.ParseFromString(reply.to_string());
+        clock = std::max(clock, res.clock());
+        rank = res.reg().rank();
+
+        std::cout << "[REF] Servidor registrado: nome=" << server_name
+                  << " rank=" << rank << " clock=" << clock << std::endl;
+    }
+
+    void list_servers() {
+        chat::ReferenceRequest req;
+        clock++;
+        req.set_id(gen_id());
+        req.set_timestamp(get_timestamp());
+        req.set_clock(clock);
+        req.mutable_list();
+
+        std::string out;
+        req.SerializeToString(&out);
+        ref_socket.send(zmq::buffer(out), zmq::send_flags::none);
+
+        zmq::message_t reply;
+        ref_socket.recv(reply, zmq::recv_flags::none);
+
+        chat::ReferenceResponse res;
+        res.ParseFromString(reply.to_string());
+        clock = std::max(clock, res.clock());
+
+        std::cout << "[REF] Servidores ativos na rede: ";
+        for (const auto& s : res.list().servers()) {
+            std::cout << s.name() << " (rank " << s.rank() << ") ";
+        }
+        std::cout << std::endl;
+    }
+
+    void send_heartbeat() {
+        chat::ReferenceRequest req;
+        clock++;
+        req.set_id(gen_id());
+        req.set_timestamp(get_timestamp());
+        req.set_clock(clock);
+        req.mutable_heartbeat()->set_name(server_name);
+
+        std::string out;
+        req.SerializeToString(&out);
+        ref_socket.send(zmq::buffer(out), zmq::send_flags::none);
+
+        zmq::message_t reply;
+        ref_socket.recv(reply, zmq::recv_flags::none);
+
+        chat::ReferenceResponse res;
+        res.ParseFromString(reply.to_string());
+        clock = std::max(clock, res.clock());
+
+        if (res.has_heartbeat() && res.heartbeat().status()) {
+            int64_t ref_time = res.heartbeat().physical_time();
+            int64_t sys_now = get_system_time();
+            clock_offset = ref_time - sys_now;
+            std::cout << "[HEARTBEAT] Enviado (msg #" << req_count << "). Relogio sincronizado. Offset: "
+                      << clock_offset << "ms | Hora ref: " << ref_time << " | Clock: " << clock << std::endl;
+        }
     }
 
     void get_login(const chat::LoginRequest& req, int64_t ts, chat::Response& res) {
@@ -119,6 +209,8 @@ private:
             pub.set_channel(req.channel());
             pub.set_content(req.content());
             pub.set_timestamp(get_timestamp());
+            clock++;
+            pub.set_clock(clock);
 
             std::string out;
             pub.SerializeToString(&out);
@@ -128,7 +220,8 @@ private:
             pub_res->set_status(true);
             pub_res->set_message("Published OK.");
             std::cout << "[PUB] canal=" << req.channel() << " user=" << req.user()
-                      << " msg=\"" << req.content() << "\" ts=" << pub.timestamp() << std::endl;
+                      << " msg=\"" << req.content() << "\" ts=" << pub.timestamp()
+                      << " clock=" << pub.clock() << std::endl;
         } else {
             pub_res->set_status(false);
             pub_res->set_message("Publish Error.");
@@ -136,23 +229,43 @@ private:
     }
 
 public:
-    Server(const std::string& broker_uri, const std::string& proxy_uri, const std::string& db_path)
-        : context(1),
+    Server(const std::string& broker_uri, const std::string& proxy_uri, const std::string& ref_uri,
+           const std::string& name, const std::string& db_path)
+        : server_name(name),
+          rank(0),
+          clock(0),
+          clock_offset(0),
+          req_count(0),
+          context(1),
           rep_socket(context, zmq::socket_type::rep),
           pub_socket(context, zmq::socket_type::pub),
+          ref_socket(context, zmq::socket_type::req),
           db(db_path) {
         rep_socket.connect(broker_uri);
         pub_socket.connect(proxy_uri);
+        ref_socket.connect(ref_uri);
     }
 
     void run() {
+        register_in_reference();
+        list_servers();
+
         while (true) {
             zmq::message_t msg;
             rep_socket.recv(msg, zmq::recv_flags::none);
 
             chat::Request req;
             req.ParseFromString(msg.to_string());
-            std::cout << "[RECV] id=" << req.id() << " ts=" << req.timestamp() << std::endl;
+            clock = std::max(clock, req.clock());
+            req_count++;
+
+            std::cout << "[RECV] id=" << req.id() << " ts=" << req.timestamp()
+                      << " clock=" << req.clock() << std::endl;
+
+            // A cada 10 mensagens recebidas de clientes, envia heartbeat e sincroniza relógio físico
+            if (req_count % 10 == 0) {
+                send_heartbeat();
+            }
 
             chat::Response res;
             res.set_id(gen_id());
@@ -163,10 +276,14 @@ public:
             else if (req.has_list()) list_channels(res);
             else if (req.has_publish()) publish_message(req.publish(), req.timestamp(), res);
 
+            clock++;
+            res.set_clock(clock);
+
             std::string out;
             res.SerializeToString(&out);
             rep_socket.send(zmq::buffer(out), zmq::send_flags::none);
-            std::cout << "[SEND] id=" << res.id() << " ts=" << res.timestamp() << std::endl;
+            std::cout << "[SEND] id=" << res.id() << " ts=" << res.timestamp()
+                      << " clock=" << res.clock() << std::endl;
         }
     }
 };
@@ -174,8 +291,10 @@ public:
 int main() {
     const char* host = std::getenv("HOSTNAME");
     std::string id = host ? host : "local";
+    std::srand(std::time(nullptr));
 
-    Server server("tcp://broker:5556", "tcp://proxy:5557", "/data/server_" + id + ".db");
+    Server server("tcp://broker:5556", "tcp://proxy:5557", "tcp://reference:5559",
+                  "srv_cpp_" + id, "/data/server_" + id + ".db");
     server.run();
     return 0;
 }
