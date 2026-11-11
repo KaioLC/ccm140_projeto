@@ -60,3 +60,42 @@ services:
       - proxy
     deploy:
       replicas: 2
+
+  java_server:
+    build:
+      context: .
+      dockerfile: java_server_client/Dockerfile
+    image: ccm140:java
+    command: ["chat.Servidor"]
+    environment:
+      BROKER_ENDPOINT: tcp://broker:5556
+      PROXY_ENDPOINT: tcp://proxy:5557
+      REFERENCE_ENDPOINT: tcp://reference:5559
+      DB_DIR: /data
+      SERVER_PEER_PORT: "6000"
+    volumes:
+      - ./data/java:/data
+    expose:
+      - "6000"
+    depends_on:
+      - broker
+      - proxy
+      - reference
+    deploy:
+      replicas: 2
+
+  java_client:
+    build:
+      context: .
+      dockerfile: java_server_client/Dockerfile
+    image: ccm140:java
+    command: ["chat.ClienteBot"]
+    environment:
+      BROKER_ENDPOINT: tcp://broker:5555
+      PROXY_ENDPOINT: tcp://proxy:5558
+    depends_on:
+      - broker
+      - proxy
+      - java_server
+    deploy:
+      replicas: 2

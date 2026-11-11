@@ -136,6 +136,7 @@ message ReferenceResponse {
 
 message ClockSyncRequest {
   string server = 1;
+  int64 target_time = 2;
 }
 
 message ClockSyncResponse {
@@ -170,7 +171,15 @@ message ServerMessage {
     ClockSyncResponse clock_res = 5;
     ElectionRequest election = 6;
     ElectionResponse election_res = 7;
+    ReplicationSyncRequest replication_sync = 8;
+    ReplicationSyncResponse replication_snapshot = 9;
   }
+}
+
+message ReplicationSyncRequest {}
+
+message ReplicationSyncResponse {
+  repeated ReplicationEvent events = 1;
 }
 
 enum ReplicationType {

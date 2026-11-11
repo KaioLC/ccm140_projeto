@@ -7,6 +7,19 @@ Sistema distribuído para troca de mensagens instantâneas utilizando Docker, Ze
 - **Rafa**: Python
 - **Daniel**: Java
 
+## Implementação Java
+
+Os serviços Java do Daniel estão em `java_server_client/` e reutilizam o
+broker, proxy, nó de referência e contrato compartilhados do projeto. Para
+executar duas réplicas Java junto da configuração existente:
+
+```powershell
+docker compose up --build --scale java_server=2 --scale java_client=2
+```
+
+Consulte [docs/servidor_java.md](docs/servidor_java.md) para detalhes de
+compilação, endpoints, persistência e integração com os servidores C++.
+
 ## Mensagens Trocadas (`chat.proto`)
 
 Todas as mensagens enviadas contêm obrigatoriamente o identificador único (`id`), o `timestamp` de envio e o relógio lógico de Lamport (`clock`):
