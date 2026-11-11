@@ -4,6 +4,8 @@
 #include <chrono>
 #include <cstdlib>
 #include <algorithm>
+#include <thread>
+#include <atomic>
 #include <sqlite3.h>
 #include <zmq.hpp>
 #include "chat.pb.h"
@@ -55,15 +57,20 @@ public:
 class Server {
 private:
     std::string server_name;
+    std::string endpoint;
+    std::string proxy_sub_uri;
+    std::string coordinator;
     int rank;
     int64_t clock;
     int64_t clock_offset;
     int req_count;
+    std::atomic<bool> running;
 
     zmq::context_t context;
     zmq::socket_t rep_socket;
     zmq::socket_t pub_socket;
     zmq::socket_t ref_socket;
+    zmq::socket_t peer_rep_socket;
     Database db;
 
     int64_t get_system_time() {
@@ -86,7 +93,9 @@ private:
         req.set_id(gen_id());
         req.set_timestamp(get_timestamp());
         req.set_clock(clock);
-        req.mutable_reg()->set_name(server_name);
+        auto* reg = req.mutable_reg();
+        reg->set_name(server_name);
+        reg->set_endpoint(endpoint);
 
         std::string out;
         req.SerializeToString(&out);
@@ -100,11 +109,11 @@ private:
         clock = std::max(clock, res.clock());
         rank = res.reg().rank();
 
-        std::cout << "[REF] Servidor registrado: nome=" << server_name
-                  << " rank=" << rank << " clock=" << clock << std::endl;
+        std::cout << "[REF] Registrado: nome=" << server_name
+                  << " rank=" << rank << " endpoint=" << endpoint << std::endl;
     }
 
-    void list_servers() {
+    std::vector<chat::ServerInfo> fetch_server_list() {
         chat::ReferenceRequest req;
         clock++;
         req.set_id(gen_id());
@@ -123,11 +132,132 @@ private:
         res.ParseFromString(reply.to_string());
         clock = std::max(clock, res.clock());
 
-        std::cout << "[REF] Servidores ativos na rede: ";
+        std::vector<chat::ServerInfo> list;
         for (const auto& s : res.list().servers()) {
-            std::cout << s.name() << " (rank " << s.rank() << ") ";
+            list.push_back(s);
         }
-        std::cout << std::endl;
+        return list;
+    }
+
+    void announce_coordinator() {
+        coordinator = server_name;
+        chat::CoordinatorAnnouncement ann;
+        ann.set_coordinator(server_name);
+        ann.set_rank(rank);
+        ann.set_timestamp(get_timestamp());
+        clock++;
+        ann.set_clock(clock);
+
+        std::string out;
+        ann.SerializeToString(&out);
+        pub_socket.send(zmq::buffer(std::string("servers")), zmq::send_flags::sndmore);
+        pub_socket.send(zmq::buffer(out), zmq::send_flags::none);
+
+        std::cout << "[ELECTION] Eleito coordenador: " << server_name << " (rank " << rank << ")" << std::endl;
+    }
+
+    void start_election() {
+        std::cout << "[ELECTION] Iniciando eleicao por bullying..." << std::endl;
+        auto servers = fetch_server_list();
+        bool higher_alive = false;
+
+        for (const auto& s : servers) {
+            if (s.rank() > rank && s.name() != server_name && !s.endpoint().empty()) {
+                try {
+                    zmq::socket_t req(context, zmq::socket_type::req);
+                    req.set(zmq::sockopt::rcvtimeo, 1000);
+                    req.set(zmq::sockopt::sndtimeo, 1000);
+                    req.connect(s.endpoint());
+
+                    chat::ServerMessage msg;
+                    clock++;
+                    msg.set_id(gen_id());
+                    msg.set_timestamp(get_timestamp());
+                    msg.set_clock(clock);
+                    auto* el = msg.mutable_election();
+                    el->set_server(server_name);
+                    el->set_rank(rank);
+
+                    std::string out;
+                    msg.SerializeToString(&out);
+                    req.send(zmq::buffer(out), zmq::send_flags::none);
+
+                    zmq::message_t reply;
+                    if (req.recv(reply, zmq::recv_flags::none)) {
+                        chat::ServerMessage rep;
+                        rep.ParseFromString(reply.to_string());
+                        clock = std::max(clock, rep.clock());
+                        if (rep.has_election_res() && rep.election_res().status()) {
+                            higher_alive = true;
+                            std::cout << "[ELECTION] Servidor superior " << s.name() << " respondeu OK" << std::endl;
+                        }
+                    }
+                } catch (...) {}
+            }
+        }
+
+        if (!higher_alive) {
+            announce_coordinator();
+        }
+    }
+
+    void sync_clock_with_coordinator() {
+        if (coordinator == server_name) return;
+
+        if (coordinator.empty()) {
+            start_election();
+            return;
+        }
+
+        std::string coord_endpoint;
+        auto servers = fetch_server_list();
+        for (const auto& s : servers) {
+            if (s.name() == coordinator) {
+                coord_endpoint = s.endpoint();
+                break;
+            }
+        }
+
+        if (coord_endpoint.empty()) {
+            start_election();
+            return;
+        }
+
+        try {
+            zmq::socket_t req(context, zmq::socket_type::req);
+            req.set(zmq::sockopt::rcvtimeo, 1500);
+            req.set(zmq::sockopt::sndtimeo, 1500);
+            req.connect(coord_endpoint);
+
+            chat::ServerMessage msg;
+            clock++;
+            msg.set_id(gen_id());
+            msg.set_timestamp(get_timestamp());
+            msg.set_clock(clock);
+            msg.mutable_clock_sync()->set_server(server_name);
+
+            std::string out;
+            msg.SerializeToString(&out);
+            req.send(zmq::buffer(out), zmq::send_flags::none);
+
+            zmq::message_t reply;
+            if (req.recv(reply, zmq::recv_flags::none)) {
+                chat::ServerMessage rep;
+                rep.ParseFromString(reply.to_string());
+                clock = std::max(clock, rep.clock());
+                if (rep.has_clock_res()) {
+                    int64_t coord_time = rep.clock_res().physical_time();
+                    int64_t sys_now = get_system_time();
+                    clock_offset = coord_time - sys_now;
+                    std::cout << "[BERKELEY] Sincronizado com coordenador " << coordinator
+                              << " | Offset: " << clock_offset << "ms | Hora: " << get_timestamp() << std::endl;
+                    return;
+                }
+            }
+        } catch (...) {}
+
+        std::cout << "[WARN] Coordenador " << coordinator << " nao respondeu ao relogio." << std::endl;
+        start_election();
     }
 
     void send_heartbeat() {
@@ -149,12 +279,58 @@ private:
         res.ParseFromString(reply.to_string());
         clock = std::max(clock, res.clock());
 
-        if (res.has_heartbeat() && res.heartbeat().status()) {
-            int64_t ref_time = res.heartbeat().physical_time();
-            int64_t sys_now = get_system_time();
-            clock_offset = ref_time - sys_now;
-            std::cout << "[HEARTBEAT] Enviado (msg #" << req_count << "). Relogio sincronizado. Offset: "
-                      << clock_offset << "ms | Hora ref: " << ref_time << " | Clock: " << clock << std::endl;
+        std::cout << "[HEARTBEAT] Enviado (msg #" << req_count << ") | Clock: " << clock << std::endl;
+    }
+
+    void listen_peer() {
+        while (running) {
+            zmq::message_t msg;
+            if (!peer_rep_socket.recv(msg, zmq::recv_flags::none)) continue;
+
+            chat::ServerMessage req;
+            req.ParseFromString(msg.to_string());
+            clock = std::max(clock, req.clock());
+
+            chat::ServerMessage rep;
+            rep.set_id(gen_id());
+            rep.set_timestamp(get_timestamp());
+
+            if (req.has_clock_sync()) {
+                auto* sync = rep.mutable_clock_res();
+                sync->set_server(server_name);
+                sync->set_physical_time(get_timestamp());
+            } else if (req.has_election()) {
+                auto* elec = rep.mutable_election_res();
+                elec->set_server(server_name);
+                elec->set_status(true);
+            }
+
+            clock++;
+            rep.set_clock(clock);
+            std::string out;
+            rep.SerializeToString(&out);
+            peer_rep_socket.send(zmq::buffer(out), zmq::send_flags::none);
+        }
+    }
+
+    void listen_servers_sub() {
+        zmq::socket_t sub(context, zmq::socket_type::sub);
+        sub.connect(proxy_sub_uri);
+        sub.set(zmq::sockopt::subscribe, "servers");
+
+        while (running) {
+            zmq::message_t topic;
+            zmq::message_t data;
+            if (!sub.recv(topic, zmq::recv_flags::none)) continue;
+            if (!sub.recv(data, zmq::recv_flags::none)) continue;
+
+            chat::CoordinatorAnnouncement ann;
+            ann.ParseFromString(data.to_string());
+            clock = std::max(clock, ann.clock());
+            coordinator = ann.coordinator();
+
+            std::cout << "[ELECTION] Coordenador atualizado via 'servers': " << coordinator
+                      << " (rank " << ann.rank() << ")" << std::endl;
         }
     }
 
@@ -229,26 +405,44 @@ private:
     }
 
 public:
-    Server(const std::string& broker_uri, const std::string& proxy_uri, const std::string& ref_uri,
-           const std::string& name, const std::string& db_path)
+    Server(const std::string& broker_uri, const std::string& proxy_pub_uri, const std::string& proxy_sub,
+           const std::string& ref_uri, const std::string& name, const std::string& host_id, const std::string& db_path)
         : server_name(name),
+          endpoint("tcp://" + host_id + ":6000"),
+          proxy_sub_uri(proxy_sub),
+          coordinator(""),
           rank(0),
           clock(0),
           clock_offset(0),
           req_count(0),
+          running(true),
           context(1),
           rep_socket(context, zmq::socket_type::rep),
           pub_socket(context, zmq::socket_type::pub),
           ref_socket(context, zmq::socket_type::req),
+          peer_rep_socket(context, zmq::socket_type::rep),
           db(db_path) {
         rep_socket.connect(broker_uri);
-        pub_socket.connect(proxy_uri);
+        pub_socket.connect(proxy_pub_uri);
         ref_socket.connect(ref_uri);
+        peer_rep_socket.bind("tcp://0.0.0.0:6000");
+    }
+
+    ~Server() {
+        running = false;
     }
 
     void run() {
         register_in_reference();
-        list_servers();
+
+        std::thread peer_t(&Server::listen_peer, this);
+        peer_t.detach();
+
+        std::thread sub_t(&Server::listen_servers_sub, this);
+        sub_t.detach();
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        start_election();
 
         while (true) {
             zmq::message_t msg;
@@ -262,9 +456,12 @@ public:
             std::cout << "[RECV] id=" << req.id() << " ts=" << req.timestamp()
                       << " clock=" << req.clock() << std::endl;
 
-            // A cada 10 mensagens recebidas de clientes, envia heartbeat e sincroniza relógio físico
             if (req_count % 10 == 0) {
                 send_heartbeat();
+            }
+
+            if (req_count % 15 == 0) {
+                sync_clock_with_coordinator();
             }
 
             chat::Response res;
@@ -293,8 +490,8 @@ int main() {
     std::string id = host ? host : "local";
     std::srand(std::time(nullptr));
 
-    Server server("tcp://broker:5556", "tcp://proxy:5557", "tcp://reference:5559",
-                  "srv_cpp_" + id, "/data/server_" + id + ".db");
+    Server server("tcp://broker:5556", "tcp://proxy:5557", "tcp://proxy:5558", "tcp://reference:5559",
+                  "srv_cpp_" + id, id, "/data/server_" + id + ".db");
     server.run();
     return 0;
 }
