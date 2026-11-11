@@ -79,9 +79,6 @@ message Publication {
   int64 clock = 6;
 }
 
-// ==========================================
-// Mensagens de Referência e Heartbeat (Parte 3)
-// ==========================================
 
 message ServerInfo {
   string name = 1;
