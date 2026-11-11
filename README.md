@@ -5,7 +5,7 @@ Sistema distribuído para troca de mensagens instantâneas utilizando Docker, Ze
 ## Integrantes e Linguagens
 - **Kaio**: C++
 - **Rafa**: Python
-- **Daniel**: *(adicionar linguagem)*
+- **Daniel**: Java
 
 ## Mensagens Trocadas (`chat.proto`)
 
