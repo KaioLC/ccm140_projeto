@@ -7,11 +7,11 @@ def main():
     socket = context.socket(zmq.REP)
     socket.bind("tcp://*:5559")
 
-    servers = {}          # {server_name: rank}
-    last_heartbeat = {}   # {server_name: timestamp_seconds}
+    servers = {}
+    last_heartbeat = {}
     next_rank = 1
     clock = 0
-    TIMEOUT = 45.0        # Timeout em segundos para considerar servidor inativo
+    TIMEOUT = 45.0
 
     print("[REFERENCE] Servico de referencia ativo na porta 5559", flush=True)
 
@@ -20,7 +20,6 @@ def main():
         now_ts = int(time.time() * 1000)
         now_sec = time.time()
 
-        # Evicção de servidores sem heartbeat recente
         expired = [s for s, t in last_heartbeat.items() if now_sec - t > TIMEOUT]
         for s in expired:
             print(f"[REFERENCE] Servidor '{s}' inativo removido da lista (timeout > {TIMEOUT}s)", flush=True)
@@ -41,34 +40,37 @@ def main():
 
         if payload_type == "reg":
             name = req.reg.name
+            endpoint = req.reg.endpoint
             if name not in servers:
-                servers[name] = next_rank
+                servers[name] = {"rank": next_rank, "endpoint": endpoint}
                 next_rank += 1
-                print(f"[REFERENCE] Novo servidor registrado: '{name}' com rank {servers[name]}", flush=True)
+                print(f"[REFERENCE] Novo servidor registrado: '{name}' com rank {servers[name]['rank']} ({endpoint})", flush=True)
             else:
-                print(f"[REFERENCE] Servidor reconectado: '{name}' (rank {servers[name]})", flush=True)
+                servers[name]["endpoint"] = endpoint
+                print(f"[REFERENCE] Servidor reconectado: '{name}' (rank {servers[name]['rank']})", flush=True)
 
             last_heartbeat[name] = now_sec
             res.reg.name = name
-            res.reg.rank = servers[name]
+            res.reg.rank = servers[name]["rank"]
 
         elif payload_type == "list":
-            for s_name, s_rank in servers.items():
+            for s_name, info in servers.items():
                 s_info = res.list.servers.add()
                 s_info.name = s_name
-                s_info.rank = s_rank
+                s_info.rank = info["rank"]
+                s_info.endpoint = info.get("endpoint", "")
             print(f"[REFERENCE] Listagem de servidores enviada: {len(servers)} ativo(s)", flush=True)
 
         elif payload_type == "heartbeat":
             name = req.heartbeat.name
             if name not in servers:
-                servers[name] = next_rank
+                servers[name] = {"rank": next_rank, "endpoint": ""}
                 next_rank += 1
             last_heartbeat[name] = now_sec
 
             res.heartbeat.status = True
-            res.heartbeat.physical_time = now_ts
-            print(f"[REFERENCE] Heartbeat recebido de '{name}'. Hora fisica: {now_ts}", flush=True)
+            # res.heartbeat.physical_time = now_ts
+            print(f"[REFERENCE] Heartbeat recebido de '{name}'", flush=True)
 
         socket.send(res.SerializeToString())
 
