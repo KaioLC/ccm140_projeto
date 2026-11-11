@@ -6,6 +6,7 @@
 #include <ctime>
 #include <thread>
 #include <cstdlib>
+#include <algorithm>
 #include <zmq.hpp>
 #include "chat.pb.h"
 
@@ -13,6 +14,7 @@ class Client {
 private:
     std::string user;
     std::string user_id;
+    int64_t clock;
     zmq::context_t context;
     zmq::socket_t req_socket;
     zmq::socket_t sub_socket;
@@ -29,20 +31,26 @@ private:
     }
 
     chat::Response send_req(chat::Request& req) {
+        clock++;
         req.set_id(gen_id());
         req.set_timestamp(get_timestamp());
+        req.set_clock(clock);
 
         std::string out;
         req.SerializeToString(&out);
         req_socket.send(zmq::buffer(out), zmq::send_flags::none);
-        std::cout << "[SEND] user=" << user << " id=" << req.id() << " ts=" << req.timestamp() << std::endl;
+        std::cout << "[SEND] user=" << user << " id=" << req.id()
+                  << " ts=" << req.timestamp() << " clock=" << req.clock() << std::endl;
 
         zmq::message_t reply;
         req_socket.recv(reply, zmq::recv_flags::none);
 
         chat::Response res;
         res.ParseFromString(reply.to_string());
-        std::cout << "[RECV] user=" << user << " id=" << res.id() << " ts=" << res.timestamp() << std::endl;
+        clock = std::max(clock, res.clock());
+
+        std::cout << "[RECV] user=" << user << " id=" << res.id()
+                  << " ts=" << res.timestamp() << " clock=" << clock << std::endl;
         return res;
     }
 
@@ -55,12 +63,14 @@ private:
 
             chat::Publication pub;
             pub.ParseFromString(data_msg.to_string());
+            clock = std::max(clock, pub.clock());
             int64_t recv_ts = get_timestamp();
 
             std::cout << "[SUB " << user << "] canal=" << pub.channel()
                       << " msg=\"" << pub.content() << "\""
                       << " ts_envio=" << pub.timestamp()
-                      << " ts_recebimento=" << recv_ts << std::endl;
+                      << " ts_recebimento=" << recv_ts
+                      << " clock=" << clock << std::endl;
         }
     }
 
@@ -68,6 +78,7 @@ public:
     Client(const std::string& broker_uri, const std::string& proxy_uri, const std::string& name)
         : user(name),
           user_id(gen_id()),
+          clock(0),
           context(1),
           req_socket(context, zmq::socket_type::req),
           sub_socket(context, zmq::socket_type::sub) {
