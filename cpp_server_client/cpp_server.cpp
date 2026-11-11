@@ -27,17 +27,17 @@ public:
     }
 
     bool save_login(const std::string& id, const std::string& user, int64_t ts) {
-        std::string sql = "INSERT INTO logins VALUES ('" + id + "', '" + user + "', " + std::to_string(ts) + ");";
+        std::string sql = "INSERT OR IGNORE INTO logins VALUES ('" + id + "', '" + user + "', " + std::to_string(ts) + ");";
         return sqlite3_exec(db, sql.c_str(), nullptr, nullptr, nullptr) == SQLITE_OK;
     }
 
     bool create_channel(const std::string& id, const std::string& name, int64_t ts) {
-        std::string sql = "INSERT INTO channels VALUES ('" + id + "', '" + name + "', " + std::to_string(ts) + ");";
+        std::string sql = "INSERT OR IGNORE INTO channels VALUES ('" + id + "', '" + name + "', " + std::to_string(ts) + ");";
         return sqlite3_exec(db, sql.c_str(), nullptr, nullptr, nullptr) == SQLITE_OK;
     }
 
     bool save_message(const std::string& id, const std::string& user, const std::string& channel, const std::string& content, int64_t ts) {
-        std::string sql = "INSERT INTO messages VALUES ('" + id + "', '" + user + "', '" + channel + "', '" + content + "', " + std::to_string(ts) + ");";
+        std::string sql = "INSERT OR IGNORE INTO messages VALUES ('" + id + "', '" + user + "', '" + channel + "', '" + content + "', " + std::to_string(ts) + ");";
         return sqlite3_exec(db, sql.c_str(), nullptr, nullptr, nullptr) == SQLITE_OK;
     }
 
@@ -282,6 +282,26 @@ private:
         std::cout << "[HEARTBEAT] Enviado (msg #" << req_count << ") | Clock: " << clock << std::endl;
     }
 
+    void replicate_event(chat::ReplicationType type, const std::string& id, const std::string& user,
+                         const std::string& channel, const std::string& content, const std::string& name, int64_t ts) {
+        chat::ReplicationEvent ev;
+        ev.set_sender(server_name);
+        ev.set_type(type);
+        ev.set_id(id);
+        ev.set_timestamp(ts);
+        clock++;
+        ev.set_clock(clock);
+        if (!user.empty()) ev.set_user(user);
+        if (!channel.empty()) ev.set_channel(channel);
+        if (!content.empty()) ev.set_content(content);
+        if (!name.empty()) ev.set_name(name);
+
+        std::string out;
+        ev.SerializeToString(&out);
+        pub_socket.send(zmq::buffer(std::string("replication")), zmq::send_flags::sndmore);
+        pub_socket.send(zmq::buffer(out), zmq::send_flags::none);
+    }
+
     void listen_peer() {
         while (running) {
             zmq::message_t msg;
@@ -334,12 +354,43 @@ private:
         }
     }
 
+    void listen_replication() {
+        zmq::socket_t sub(context, zmq::socket_type::sub);
+        sub.connect(proxy_sub_uri);
+        sub.set(zmq::sockopt::subscribe, "replication");
+
+        while (running) {
+            zmq::message_t topic;
+            zmq::message_t data;
+            if (!sub.recv(topic, zmq::recv_flags::none)) continue;
+            if (!sub.recv(data, zmq::recv_flags::none)) continue;
+
+            chat::ReplicationEvent ev;
+            ev.ParseFromString(data.to_string());
+            if (ev.sender() == server_name) continue;
+
+            clock = std::max(clock, ev.clock());
+
+            if (ev.type() == chat::REP_LOGIN) {
+                db.save_login(ev.id(), ev.user(), ev.timestamp());
+            } else if (ev.type() == chat::REP_CHANNEL) {
+                db.create_channel(ev.id(), ev.name(), ev.timestamp());
+            } else if (ev.type() == chat::REP_MESSAGE) {
+                db.save_message(ev.id(), ev.user(), ev.channel(), ev.content(), ev.timestamp());
+            }
+
+            std::cout << "[REPLICA] Sincronizado: tipo=" << ev.type()
+                      << " id=" << ev.id() << " de=" << ev.sender() << std::endl;
+        }
+    }
+
     void get_login(const chat::LoginRequest& req, int64_t ts, chat::Response& res) {
         std::string user = req.user();
         auto* login_res = res.mutable_login();
         login_res->set_id(req.id());
 
         if (db.save_login(req.id(), user, ts)) {
+            replicate_event(chat::REP_LOGIN, req.id(), user, "", "", "", ts);
             login_res->set_status(true);
             login_res->set_message("Login Successfully.");
             std::cout << "[INFO] New session: " << user << std::endl;
@@ -357,6 +408,7 @@ private:
         chan_res->set_name(name);
 
         if (db.create_channel(req.id(), name, ts)) {
+            replicate_event(chat::REP_CHANNEL, req.id(), "", "", "", name, ts);
             chan_res->set_status(true);
             chan_res->set_message("Channel created.");
             std::cout << "[INFO] Channel created: " << name << std::endl;
@@ -379,6 +431,8 @@ private:
         pub_res->set_id(req.id());
 
         if (db.save_message(req.id(), req.user(), req.channel(), req.content(), ts)) {
+            replicate_event(chat::REP_MESSAGE, req.id(), req.user(), req.channel(), req.content(), "", ts);
+
             chat::Publication pub;
             pub.set_id(req.id());
             pub.set_user(req.user());
@@ -440,6 +494,9 @@ public:
 
         std::thread sub_t(&Server::listen_servers_sub, this);
         sub_t.detach();
+
+        std::thread repl_t(&Server::listen_replication, this);
+        repl_t.detach();
 
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
         start_election();
