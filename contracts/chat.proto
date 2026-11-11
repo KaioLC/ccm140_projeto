@@ -79,14 +79,15 @@ message Publication {
   int64 clock = 6;
 }
 
-
 message ServerInfo {
   string name = 1;
   int32 rank = 2;
+  string endpoint = 3;
 }
 
 message RegisterRequest {
   string name = 1;
+  string endpoint = 2;
 }
 
 message RegisterResponse {
@@ -130,5 +131,44 @@ message ReferenceResponse {
     RegisterResponse reg = 4;
     ServerListResponse list = 5;
     HeartbeatResponse heartbeat = 6;
+  }
+}
+
+message ClockSyncRequest {
+  string server = 1;
+}
+
+message ClockSyncResponse {
+  string server = 1;
+  int64 physical_time = 2;
+}
+
+message ElectionRequest {
+  string server = 1;
+  int32 rank = 2;
+}
+
+message ElectionResponse {
+  string server = 1;
+  bool status = 2;
+}
+
+message CoordinatorAnnouncement {
+  string coordinator = 1;
+  int32 rank = 2;
+  int64 timestamp = 3;
+  int64 clock = 4;
+}
+
+message ServerMessage {
+  string id = 1;
+  int64 timestamp = 2;
+  int64 clock = 3;
+
+  oneof payload {
+    ClockSyncRequest clock_sync = 4;
+    ClockSyncResponse clock_res = 5;
+    ElectionRequest election = 6;
+    ElectionResponse election_res = 7;
   }
 }
