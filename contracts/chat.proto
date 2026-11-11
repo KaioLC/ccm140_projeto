@@ -172,3 +172,21 @@ message ServerMessage {
     ElectionResponse election_res = 7;
   }
 }
+
+enum ReplicationType {
+  REP_LOGIN = 0;
+  REP_CHANNEL = 1;
+  REP_MESSAGE = 2;
+}
+
+message ReplicationEvent {
+  string sender = 1;
+  ReplicationType type = 2;
+  string id = 3;
+  int64 timestamp = 4;
+  int64 clock = 5;
+  string user = 6;
+  string name = 7;
+  string channel = 8;
+  string content = 9;
+}
