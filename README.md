@@ -18,6 +18,7 @@ Todas as mensagens enviadas contêm obrigatoriamente o identificador único (`id
 5. **Registro de Servidor e Heartbeat (`ReferenceRequest` -> `ReferenceResponse`)**: O servidor se registra no serviço de referência (`tcp://reference:5559`) informando seu endpoint (`tcp://<hostname>:6000`), obtém seu `rank` e consulta a lista de servidores ativos. A cada 10 mensagens de clientes processadas, o servidor envia um *heartbeat* à referência para manter-se ativo na lista de servidores disponíveis.
 6. **Sincronização de Relógio com Coordenador (`ClockSyncRequest` -> `ClockSyncResponse`)**: A cada 15 mensagens de clientes, os servidores sincronizam seu relógio físico diretamente com o servidor eleito como coordenador (Algoritmo de Berkeley).
 7. **Eleição de Coordenador (`ElectionRequest` -> `ElectionResponse` -> `CoordinatorAnnouncement`)**: Se o coordenador não responder à sincronização de relógio, é disparada a eleição por Bullying (Valentão) entre os servidores de rank superior. O vencedor anuncia sua liderança a todos os servidores publicando no tópico `servers`.
+8. **Replicação de Dados (`ReplicationEvent`)**: Ao registrar um login, canal ou mensagem no SQLite, o servidor propaga o evento no tópico `replication`. Todos os servidores gravam a cópia em seu banco local, garantindo que todas as réplicas possuam os mesmos dados.
 
 ### Fluxo das Mensagens
 
@@ -43,3 +44,20 @@ Todas as mensagens enviadas contêm obrigatoriamente o identificador único (`id
 | **9. Eleição (Req)** | Servidor A -> Servidor B | ZeroMQ `REQ/REP` (`6000`) | `ServerMessage` (`election`) | `id`, `server`, `rank`, `timestamp`, `clock` | Envia eleição para servidores de rank superior |
 | **9. Eleição (Rep)** | Servidor B -> Servidor A | ZeroMQ `REP/REQ` (`6000`) | `ServerMessage` (`election_res`)| `id`, `server`, `status`, `timestamp`, `clock` | Servidor superior responde OK |
 | **10. Anúncio Coordenador** | Coordenador -> Proxy -> Servidores | ZeroMQ `PUB/SUB` (`5557`/`5558`) | `CoordinatorAnnouncement` | `coordinator`, `rank`, `timestamp`, `clock` | Atualiza coordenador ativo no tópico `servers` |
+| **11. Replicação (Pub/Sub)** | Servidor -> Proxy -> Servidores | ZeroMQ `PUB/SUB` (`5557`/`5558`) | `ReplicationEvent` | `sender`, `type`, `id`, `data...`, `clock` | Réplicas inserem no SQLite local (`INSERT OR IGNORE`) |
+
+---
+
+## Consistência e Replicação
+
+### Problema
+O Broker do ZeroMQ distribui as requisições dos clientes entre os servidores em modo Round-Robin. Consequentemente, cada servidor armazenava apenas a fração das mensagens que ele próprio atendia. Se um nó caísse ou recebesse uma requisição de leitura (`ChannelListRequest`), o histórico ficava fragmentado ou incompleto.
+
+### Método Escolhido: Réplica Ativa com Propagação por Push
+Conforme estudado nas aulas teóricas de Sistemas Distribuídos:
+1. **Réplica Ativa (Active Replication)**: Cada operação de modificação de estado (`login`, `channel`, `message`) é propagada e executada em todas as réplicas.
+2. **Atualização por Push**: O servidor que atende a requisição do cliente grava em seu SQLite e realiza imediatamente o *push* do evento para os demais nós utilizando o Proxy Pub/Sub no tópico dedicado `replication`.
+3. **Consistência Eventual Forte e Idempotência**:
+   - Cada entidade possui chave primária global única gerada no envio (`id` baseado em timestamp e semente aleatória) e ordenação lógica por Lamport (`clock`).
+   - As gravações nos SQLite locais utilizam `INSERT OR IGNORE`, garantindo idempotência total contra duplicações ou reenvios.
+   - Assim que a propagação ocorre, todas as réplicas convergem para o mesmo estado de dados, permitindo tolerância a falhas sem perda de dados.
