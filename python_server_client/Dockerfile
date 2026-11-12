@@ -1,11 +1,8 @@
-FROM python:3.11-slim
+FROM alpine:3.21
 
-RUN apt-get update && apt-get install -y --no-install-recommends protobuf-compiler sqlite3 && rm -rf /var/lib/apt/lists/* && mkdir -p /data
+RUN apk add --no-cache python3 py3-pyzmq protoc py3-protobuf sqlite && mkdir -p /data
 
 WORKDIR /app
-
-COPY python_server_client/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
 
 COPY contracts/chat.proto .
 RUN protoc --python_out=. chat.proto
