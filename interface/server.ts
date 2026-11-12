@@ -15,6 +15,12 @@ interface ServerInfo {
   endpoint: string;
 }
 
+interface CoordinatorInfo {
+  name: string;
+  rank: number;
+  source: "announcement" | "rank";
+}
+
 interface MessageItem {
   id: string;
   channel: string;
@@ -25,7 +31,7 @@ interface MessageItem {
   lang: "C++" | "Python" | "Java" | "Outro";
 }
 
-let coordinator = { name: "-", rank: 0 };
+let coordinator: CoordinatorInfo = { name: "-", rank: 0, source: "rank" };
 let serversList: ServerInfo[] = [];
 const messages: MessageItem[] = [];
 const channelStats: Record<string, number> = {};
@@ -51,6 +57,37 @@ function broadcast(type: string, data: any) {
     } catch {
       clients.delete(client);
     }
+  }
+}
+
+function reconcileCoordinatorFromServers() {
+  const activeServers = serversList.filter((s) => s.name && s.endpoint);
+  const announcedCoordinatorIsActive = activeServers.some(
+    (s) => s.name === coordinator.name
+  );
+
+  if (coordinator.source === "announcement" && announcedCoordinatorIsActive) {
+    return;
+  }
+
+  let highestRanked: ServerInfo | undefined;
+  for (const s of activeServers) {
+    if (!highestRanked || s.rank > highestRanked.rank) {
+      highestRanked = s;
+    }
+  }
+
+  const nextCoordinator: CoordinatorInfo = highestRanked
+    ? { name: highestRanked.name, rank: highestRanked.rank, source: "rank" }
+    : { name: "-", rank: 0, source: "rank" };
+
+  if (
+    coordinator.name !== nextCoordinator.name ||
+    coordinator.rank !== nextCoordinator.rank ||
+    coordinator.source !== nextCoordinator.source
+  ) {
+    coordinator = nextCoordinator;
+    broadcast("coordinator", { coordinator, servers: serversList });
   }
 }
 
@@ -114,7 +151,7 @@ const html = `<!DOCTYPE html>
 </head>
 <body>
   <header>
-    <div class="header-item">LÍDER: <strong class="mono" id="coord-name">-</strong> <span class="mono" id="coord-rank"></span></div>
+    <div class="header-item">LÍDER: <strong class="mono" id="coord-name">-</strong> <span class="mono" id="coord-rank"></span> <span class="mono" id="coord-source"></span></div>
     <div class="header-item">SERVIDORES: <strong class="mono" id="total-servers">0</strong></div>
     <div class="header-item">MENSAGENS: <strong class="mono" id="total-msgs">0</strong></div>
     <div class="header-item">LAMPORT: <strong class="mono" id="max-clock">0</strong></div>
@@ -193,6 +230,14 @@ const html = `<!DOCTYPE html>
       render();
     }
 
+    function showCoordinator(value) {
+      currentLeader = value.name || "";
+      document.getElementById("coord-name").innerText = value.name || "-";
+      document.getElementById("coord-rank").innerText = value.rank ? ("(#" + value.rank + ")") : "";
+      document.getElementById("coord-source").innerText =
+        value.source === "rank" ? "(inferido pelo maior rank)" : "(anúncio Bully)";
+    }
+
     function render() {
       const tbody = document.getElementById("messages-table");
       tbody.innerHTML = "";
@@ -261,9 +306,7 @@ const html = `<!DOCTYPE html>
       const data = JSON.parse(e.data);
 
       if (data.type === "init") {
-        currentLeader = data.coordinator.name;
-        document.getElementById("coord-name").innerText = data.coordinator.name || "-";
-        document.getElementById("coord-rank").innerText = data.coordinator.rank ? ("(#" + data.coordinator.rank + ")") : "";
+        showCoordinator(data.coordinator);
         document.getElementById("max-clock").innerText = data.stats.maxClock;
         document.getElementById("total-msgs").innerText = data.stats.totalMessages;
         document.getElementById("badge-all").innerText = data.stats.totalMessages;
@@ -290,9 +333,7 @@ const html = `<!DOCTYPE html>
       } else if (data.type === "servers") {
         updateServers(data.servers, currentLeader);
       } else if (data.type === "coordinator") {
-        currentLeader = data.coordinator.name;
-        document.getElementById("coord-name").innerText = data.coordinator.name;
-        document.getElementById("coord-rank").innerText = "(#" + data.coordinator.rank + ")";
+        showCoordinator(data.coordinator);
         updateServers(data.servers, currentLeader);
       }
     };
@@ -350,7 +391,8 @@ async function runSubscriber() {
         const ann = CoordinatorAnnouncement.decode(dataBuf) as any;
         coordinator = {
           name: ann.coordinator,
-          rank: Number(ann.rank)
+          rank: Number(ann.rank),
+          source: "announcement"
         };
         maxClock = Math.max(maxClock, Number(ann.clock || 0));
         broadcast("coordinator", { coordinator, servers: serversList });
@@ -430,6 +472,7 @@ async function pollReference() {
           rank: Number(s.rank),
           endpoint: s.endpoint
         }));
+        reconcileCoordinatorFromServers();
         broadcast("servers", { servers: serversList });
       }
     } catch {
