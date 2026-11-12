@@ -1,0 +1,19 @@
+services:
+  interface:
+    build:
+      context: ..
+      dockerfile: interface/Dockerfile
+    image: ccm140:interface
+    container_name: ccm140_interface
+    ports:
+      - "8080:8080"
+    environment:
+      - PROXY_URI=tcp://proxy:5558
+      - REFERENCE_URI=tcp://reference:5559
+    networks:
+      - default
+
+networks:
+  default:
+    name: ccm140_projeto_default
+    external: true

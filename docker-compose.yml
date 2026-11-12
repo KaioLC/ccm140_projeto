@@ -44,6 +44,7 @@ services:
       - "8080:8080"
     depends_on:
       - proxy
+      - reference
 
   cpp_server:
     build:
