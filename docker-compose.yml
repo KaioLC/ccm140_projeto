@@ -45,6 +45,8 @@ services:
     depends_on:
       - proxy
       - reference
+    deploy:
+      replicas: 0
 
   cpp_server:
     build:
