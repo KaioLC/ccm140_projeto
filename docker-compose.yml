@@ -71,3 +71,57 @@ services:
       - proxy
     deploy:
       replicas: 2
+
+  python_server:
+    build:
+      context: .
+      dockerfile: python_server_client/Dockerfile
+    image: ccm140:python
+    command: ["/app/server"]
+    volumes:
+      - ./data/python:/data
+    depends_on:
+      - broker
+      - proxy
+      - reference
+    deploy:
+      replicas: 2
+
+  python_client:
+    build:
+      context: .
+      dockerfile: python_server_client/Dockerfile
+    image: ccm140:python
+    command: ["/app/client"]
+    depends_on:
+      - python_server
+      - proxy
+    deploy:
+      replicas: 2
+
+  java_server:
+    build:
+      context: .
+      dockerfile: java_server_client/Dockerfile
+    image: ccm140:java
+    command: ["/app/server"]
+    volumes:
+      - ./data/java:/data
+    depends_on:
+      - broker
+      - proxy
+      - reference
+    deploy:
+      replicas: 2
+
+  java_client:
+    build:
+      context: .
+      dockerfile: java_server_client/Dockerfile
+    image: ccm140:java
+    command: ["/app/client"]
+    depends_on:
+      - java_server
+      - proxy
+    deploy:
+      replicas: 2
