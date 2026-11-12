@@ -34,6 +34,20 @@ services:
     ports:
       - "5559:5559"
 
+  interface:
+    build:
+      context: .
+      dockerfile: interface/Dockerfile
+    image: ccm140:interface
+    container_name: interface
+    ports:
+      - "8080:8080"
+    depends_on:
+      - proxy
+      - reference
+    deploy:
+      replicas: 1
+
   cpp_server:
     build:
       context: .
