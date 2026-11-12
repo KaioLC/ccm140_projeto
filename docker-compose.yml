@@ -46,7 +46,7 @@ services:
       - proxy
       - reference
     deploy:
-      replicas: 0
+      replicas: 1
 
   cpp_server:
     build:
